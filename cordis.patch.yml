@@ -1,0 +1,13 @@
+# dsh-voice-engine bundle layer — neutral defaults only.
+# Override per-profile in your own cordis.patch.yml by addressing this row BY ID.
+- insert:
+    - id: dsh-voice-engine
+      name: 'dsh-voice-engine'
+      config:
+        # 指向你自己的引擎工作目录（含 .venv、tools/f5_server.py、voices.json、refs/）
+        engineRoot: ~/voice-engine
+        port: 18231
+        autoStart: true
+        # duet 云端推色上传：换成你自己的端点和凭证；留空则「→duet」按钮不出现在面板里
+        duetUploadUrl: ''
+        duetAuthorization: ''
