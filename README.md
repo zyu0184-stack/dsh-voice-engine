@@ -15,6 +15,7 @@ F5-TTS 是本地跑的 Python 服务，一次要加载 1.35 GB 模型。以前�
 | --- | --- | --- |
 | 引擎进程 | 每个插件自己 spawn | 一处 spawn，单飞防并发 |
 | 音色登记 | 改 `voices.json` 后重启 | mtime 变了自动重载 |
+| 加音色 | 手工切音频、抄逐字稿 | 传整段音频，自动转写并挑片段 |
 | 试听 | 写脚本跑一遍 | 面板里点一下 |
 | 推到云端 | 手工上传脚本 | 面板按钮，或 `POST /duet/push` |
 | 设为朗读音色 | 手改配置 | 面板按钮，或 `POST /activate` |
@@ -98,6 +99,11 @@ Windows 上解释器优先用 `pythonw.exe`（GUI 子系统），拉起时不会
 | GET | `/voices` | 音色数组 |
 | POST | `/voices` | `{key,name,ref,refText,speed,nfe,cfg}`，按 key upsert |
 | POST | `/voices/delete` | `{key}` |
+| POST | `/upload` | 裸 body 传音频，`?name=` 带文件名 → `{uploadId,bytes,file}` |
+| POST | `/voices/analyze` | `{uploadId}` → 立即回 `{jobId}`，后台转写并挑片段 |
+| GET | `/voices/job` | `?id=` → `{status,result}` 或 `{status,error}` |
+| POST | `/voices/create` | `{uploadId,key,name,start,end,refText}` → 切片、写 `voices.json` |
+| GET | `/ref-audio` | `?key=` → 该音色的参考音频（wav 流） |
 | POST | `/preview` | `{text,voice,speed}` → 合成到缓存，回 `{url,ms,bytes}` |
 | GET | `/audio/<file>` | 取试听/合成文件 |
 | POST | `/activate` | `{key}` → 把 `dsh-voice-mini` 切成 `backend:clone, voiceMode:fixed, voice:key` |
@@ -107,6 +113,35 @@ Windows 上解释器优先用 `pythonw.exe`（GUI 子系统），拉起时不会
 | GET | `/ping` | 浏览器半的加载回执，写 `work/client-ping.log` |
 
 `key` 只允许 `[A-Za-z0-9_-]`，1–64 字符。
+
+## 加一个音色
+
+整段音频进去，音色出来。分析在后台跑，面板每 2 秒轮一次，长音频也能等。
+
+```
+选文件 → POST /upload            原始音频落到 work/uploads/
+       → POST /voices/analyze    后台 spawn add_voice.py
+            ffmpeg 转 32 kHz 单声道
+            faster-whisper 转写（默认 small，cpu int8）
+            按 2.5 s 步长在转写段里滑窗，算能量覆盖 + 文本密度
+            去重叠后按分数返回前 8 个候选
+       → GET /voices/job         轮询，拿到候选列表
+       → POST /voices/create     切 9–12 s、降噪、响度归一，写 voices.json
+```
+
+候选里每一条都带起止秒数、覆盖率和转写文本。面板自动填第一条，也可以点别的，或者手填秒数。逐字稿决定克隆像不像，转写有错字就手改——参考文本和参考音频对不上，F5 只能照错的念。
+
+切出来的文件是 `<engineRoot>/refs/<key>.wav`：`highpass=f=70, afftdn=nr=10:nf=-45, loudnorm=I=-19:TP=-2:LRA=6`，32 kHz 单声道。
+
+不需要转写时跳过 `/voices/analyze`，直接 `/voices/create` 给 `start`/`end`。`add_voice.py` 也可以单独用：
+
+```bash
+.venv/Scripts/python.exe scripts/add_voice.py analyze --src 长音频.mp3
+.venv/Scripts/python.exe scripts/add_voice.py cut --src 长音频.mp3 --start 48 --end 57.5 --out refs/new.wav
+.venv/Scripts/python.exe scripts/add_voice.py text --src 长音频.mp3 --start 48 --end 57.5
+```
+
+`analyze` 的输出是 JSON：`duration` / `speech_seconds` / `segments` / `candidates[]` / `transcript[]`。换更准的模型用 `--model turbo`（CPU 上慢三到四倍）。
 
 ## 面板
 
@@ -122,6 +157,7 @@ Windows 上解释器优先用 `pythonw.exe`（GUI 子系统），拉起时不会
 - 状态行：端口、设备、累计调用数、音色数
 - 引擎离线时出现「启动引擎」
 - 音色列表：`▶ 试听`、`用这个`（切成朗读音色）、`→duet`（推云端，需配置）
+- 新增音色：选文件 → 上传并分析 → 候选片段 → 起点/终点/逐字稿 → 生成音色
 - 试听区：文本框 + 音色下拉 + 「合成并播放」
 - 云端区：远端音色状态与当前选中项
 
@@ -135,6 +171,7 @@ plugins/dsh-voice-engine/
 ├── cordis.patch.yml      # insert 自己（中性默认值）
 ├── lib/index.js          # host：引擎生命周期 + 音色库 + 路由 + 面板 HTML
 ├── lib/client.js         # 浏览器：__ModuleLoader__ 打包，只 require react
+├── scripts/add_voice.py  # 转写、挑片段、切参考音频
 ├── open-panel.mjs        # 独立打开面板的小脚本
 └── test-host.mjs         # 不起 DSH，裸 http 验路由
 ```

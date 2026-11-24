@@ -11,6 +11,7 @@
   },
   "files": [
     "lib",
+    "scripts",
     "cordis.patch.yml",
     "open-panel.mjs",
     "test-host.mjs",
